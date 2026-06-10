@@ -26,9 +26,9 @@ const PROJECTS = [
       "Moteur de jeu 3D de type Unity, construit from scratch : architecture par managers, ECS data-oriented (EnTT), rendu bgfx multiplateforme (Vulkan / D3D12 / Metal), pipeline d'assets avec hot-reload et éditeur ImGui. Conçu pour être distribué en bibliothèque C++ que d'autres développeurs peuvent linker.",
     decisions: [
       "Service Locator + lifecycle de managers ordonné",
-      "ECS data-oriented (EnTT) — Systems produisent, Managers consomment",
+      "ECS data-oriented (EnTT) : Systems produisent, Managers consomment",
       "bgfx : Vulkan / D3D12 / Metal auto-détecté",
-      "Assets référencés par GUID — survie aux déplacements de fichiers",
+      "Assets référencés par GUID : survie aux déplacements de fichiers",
       "Hot-reload shaders & textures (inotify / FSEvents / RDCW)",
       "Layout vertex vérifié par static_assert (contrat GPU)",
       "Convention GLM left-handed + depth 0..1 forcée pour bgfx",
@@ -64,15 +64,15 @@ const PROJECTS = [
     kicker: "Simulation aérospatiale · C++ · float64",
     name: "OrbitSim",
     pitch:
-      "Simulation orbitale de type Kerbal où les orbites émergent de l'intégration des forces — pas de trajectoires scriptées. Cœur déterministe à pas fixe, intégrateurs symplectiques, gravité hybride n-corps, atmosphères multi-couches et descente propulsée autonome façon Falcon 9.",
+      "Simulation orbitale de type Kerbal où les orbites émergent de l'intégration des forces, sans trajectoires scriptées. Cœur déterministe à pas fixe, intégrateurs symplectiques, gravité hybride n-corps, atmosphères multi-couches et descente propulsée autonome façon Falcon 9.",
     decisions: [
-      "Velocity Verlet / Leapfrog — conservation d'énergie sur le long terme",
+      "Velocity Verlet / Leapfrog : conservation d'énergie sur le long terme",
       "Modèle hybride : corps sur rails képlériens, vaisseau en n-corps",
       "float64 partout + origine flottante pour le rendu",
       "μ = GM chargé directement (plus précis que G·M séparés)",
       "Atmosphères multi-couches dérivées de la composition (masse molaire)",
       "Time warp via propagation analytique des coniques",
-      "Sim testable sans fenêtre — cœur physique découplé du rendu",
+      "Sim testable sans fenêtre : cœur physique découplé du rendu",
       "Validation analytique : vis-viva, Tsiolkovsky, T = 2π√(a³/μ)",
     ],
     phases: [
@@ -81,7 +81,7 @@ const PROJECTS = [
       { label: "Système solaire data-driven", status: "todo" },
       { label: "Vaisseau 6DOF & propulsion", status: "todo" },
       { label: "Atmosphères & aérodynamique", status: "todo" },
-      { label: "GNC — atterrissage autonome", status: "todo" },
+      { label: "GNC · atterrissage autonome", status: "todo" },
       { label: "Prédiction de trajectoire & warp", status: "todo" },
     ],
     stack: ["C++", "GLM (dvec3)", "SDL2", "nlohmann-json", "GoogleTest"],
@@ -112,7 +112,7 @@ const LANG_COLORS = {
 };
 
 /* ============================================================
-   GITHUB API — fetch live, fallback statique si indisponible
+   GITHUB API · fetch live, fallback statique si indisponible
    ============================================================ */
 function useGithubRepo(project) {
   const [data, setData] = useState({ ...project.fallback, live: false });
@@ -187,181 +187,416 @@ function timeAgoFr(iso) {
 }
 
 /* ============================================================
-   HERO CANVAS — starfield + cube wireframe 3D + orbites Verlet
+   HERO VISUAL · planète GLSL (fragment shader maison) + orbites
+   Couche 1 : WebGL  · sphère shadée : terrain FBM, océans spéculaires,
+                       nuages, atmosphère limbe, villes nocturnes, étoiles
+   Couche 2 : Canvas · satellites intégrés en Velocity Verlet (dt fixe)
+   Couche 3 : HUD    · éléments orbitaux calculés live depuis (r, v)
    ============================================================ */
-function HeroCanvas() {
-  const ref = useRef(null);
+
+const HERO_VERT = `
+attribute vec2 aPos;
+void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }
+`;
+
+const HERO_FRAG = `
+precision highp float;
+uniform vec2  uRes;
+uniform vec2  uCenter;
+uniform float uRadius;
+uniform float uTime;
+uniform vec2  uPar;
+
+float hash(vec3 p){ p = fract(p*0.3183099 + vec3(0.1,0.2,0.3)); p *= 17.0;
+  return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
+float h21(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float noise(vec3 x){
+  vec3 i = floor(x), f = fract(x); f = f*f*(3.0-2.0*f);
+  return mix(mix(mix(hash(i),               hash(i+vec3(1,0,0)), f.x),
+                 mix(hash(i+vec3(0,1,0)),   hash(i+vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash(i+vec3(0,0,1)),   hash(i+vec3(1,0,1)), f.x),
+                 mix(hash(i+vec3(0,1,1)),   hash(i+vec3(1,1,1)), f.x), f.y), f.z);
+}
+float fbm(vec3 p){
+  float v = 0.0, a = 0.5;
+  for(int i = 0; i < 5; i++){ v += a*noise(p); p *= 2.03; a *= 0.5; }
+  return v;
+}
+mat3 rotY(float a){ float c=cos(a), s=sin(a); return mat3(c,0.,s, 0.,1.,0., -s,0.,c); }
+mat3 rotZ(float a){ float c=cos(a), s=sin(a); return mat3(c,-s,0., s,c,0., 0.,0.,1.); }
+
+void main(){
+  vec2 frag = gl_FragCoord.xy;
+  vec2 q = (frag - uCenter - uPar) / uRadius;
+  float d = length(q);
+  vec3 col = vec3(0.0);
+
+  /* --- fond : nébuleuse discrète + étoiles jitterées (2 couches) --- */
+  vec2 suv = (frag - uPar*2.4) / uRes.y;
+  col += vec3(0.10,0.13,0.22) * fbm(vec3(suv*2.0, 7.31)) * 0.35;
+
+  /* couche lointaine : petites étoiles, parallaxe faible */
+  {
+    vec2 sp = (frag - uPar*3.0) / 34.0;
+    vec2 g = floor(sp), f = fract(sp);
+    float rnd = h21(g);
+    vec2 o = vec2(h21(g + 11.3), h21(g + 27.7));   // position aléatoire dans la cellule
+    float ds = length(f - o);
+    float m = step(0.45, rnd);
+    float tw = 0.6 + 0.4*sin(uTime*(0.8 + rnd*3.0) + rnd*40.0);
+    vec3 stc = mix(vec3(0.72,0.80,1.0), vec3(1.0,0.88,0.72), h21(g + 5.1));
+    col += stc * m * smoothstep(0.05, 0.0, ds) * (0.20 + 0.50*rnd) * tw;
+  }
+  /* couche proche : étoiles plus grosses et brillantes, parallaxe forte */
+  {
+    vec2 sp = (frag - uPar*5.5) / 78.0;
+    vec2 g = floor(sp), f = fract(sp);
+    float rnd = h21(g + 91.7);
+    vec2 o = vec2(h21(g + 41.9), h21(g + 63.2));
+    float ds = length(f - o);
+    float m = step(0.62, rnd);
+    float tw = 0.55 + 0.45*sin(uTime*(0.6 + rnd*2.0) + rnd*60.0);
+    vec3 stc = mix(vec3(0.80,0.86,1.0), vec3(1.0,0.90,0.75), h21(g + 7.7));
+    col += stc * m * smoothstep(0.075, 0.0, ds) * (0.45 + 0.55*rnd) * tw;
+    col += stc * m * exp(-ds*22.0) * 0.18 * tw;    // halo doux
+  }
+
+  vec3 L = normalize(vec3(-0.55, 0.42, 0.55));   // soleil hors-champ
+
+  /* --- atmosphère : diffusion sur le limbe --- */
+  if(d > 0.985 && d < 1.7){
+    float lit = clamp(dot(normalize(vec3(q,0.25)), L)*0.9 + 0.35, 0.0, 1.0);
+    col += vec3(0.30,0.79,0.94) * exp(-(d-1.0)*7.5)  * lit * 0.9;
+    col += vec3(0.96,0.65,0.14) * exp(-(d-1.0)*16.0) * pow(lit,3.0) * 0.45;
+  }
+
+  /* --- planète (sphère analytique, normale exacte) --- */
+  if(d < 1.0){
+    float z = sqrt(1.0 - d*d);
+    vec3 n  = vec3(q, z);
+    vec3 sp = rotZ(0.41) * rotY(uTime*0.05) * n;   // axe incliné + rotation sidérale
+
+    float h    = fbm(sp*3.1);                       // archipels, pas des continents terrestres
+    float land = smoothstep(0.49, 0.52, h);
+    float mont = smoothstep(0.60, 0.70, h);
+
+    vec3 ocean = mix(vec3(0.008,0.045,0.055), vec3(0.02,0.17,0.19), smoothstep(0.28,0.49,h));
+    vec3 terre = mix(vec3(0.28,0.14,0.05),    vec3(0.46,0.26,0.09), smoothstep(0.52,0.60,h));
+    terre = mix(terre, vec3(0.66,0.58,0.46), mont);
+    vec3 alb = mix(ocean, terre, land);
+
+    float dif  = clamp(dot(n, L), 0.0, 1.0);
+    float term = smoothstep(-0.12, 0.25, dot(n, L));
+
+    vec3 H = normalize(L + vec3(0.0,0.0,1.0));
+    float spec = pow(clamp(dot(n,H),0.0,1.0), 90.0) * (1.0-land) * dif;
+
+    vec3 cp = rotZ(0.41) * rotY(uTime*0.066) * n;  // nuages : vitesse propre
+    float cl = smoothstep(0.55, 0.72, fbm(cp*3.4 + vec3(0.0, uTime*0.01, 0.0)));
+
+    vec3 day = alb*(0.12 + 0.95*dif)*term + vec3(spec)*0.8;
+    day = mix(day, vec3(0.86,0.83,0.76)*(0.25+0.85*dif), cl*0.85*term);
+
+    /* villes nocturnes : ambre, sur les côtes, masquées par les nuages */
+    float coast   = smoothstep(0.49,0.52,h) * (1.0 - smoothstep(0.55,0.59,h));
+    float sparkle = smoothstep(0.62, 0.95, noise(sp*48.0));
+    float night   = 1.0 - term;
+    vec3 cities   = vec3(0.96,0.62,0.14) * coast * sparkle * night * (1.0-cl) * 2.2;
+
+    float fres = pow(1.0 - z, 2.4);
+    vec3 rim   = vec3(0.30,0.79,0.94) * fres * (0.25 + 0.85*dif);
+
+    col = day + cities + rim + vec3(0.30,0.79,0.94)*0.05*night;
+  }
+
+  /* --- glare solaire --- */
+  vec2 sunPx = uCenter + vec2(-uRadius*2.1, uRadius*1.45) + uPar*1.6;
+  float sd = length(frag - sunPx) / uRadius;
+  col += vec3(1.0,0.85,0.55) * exp(-sd*3.2)  * 0.55;
+  col += vec3(1.0,0.95,0.85) * exp(-sd*22.0) * 1.2;
+
+  /* --- grain anti-banding + vignette --- */
+  col += (h21(frag + uTime) - 0.5) * 0.012;
+  vec2 vuv = frag/uRes - 0.5;
+  col *= 1.0 - dot(vuv, vuv)*0.55;
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+function HeroVisual() {
+  const glRef  = useRef(null);
+  const ovRef  = useRef(null);
+  const hudRef = useRef(null);
 
   useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const glCanvas = glRef.current;
+    const ovCanvas = ovRef.current;
+    if (!glCanvas || !ovCanvas) return;
+    const ctx = ovCanvas.getContext("2d");
     const reduced =
       window.matchMedia &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    let raf = 0, w = 0, h = 0, dpr = 1;
+    /* ---------- WebGL setup ---------- */
+    let gl = null, uni = {};
+    try {
+      gl = glCanvas.getContext("webgl", { antialias: false }) ||
+           glCanvas.getContext("experimental-webgl");
+    } catch { gl = null; }
+
+    if (gl) {
+      const compile = (type, src) => {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, src);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+          console.warn(gl.getShaderInfoLog(sh));
+          return null;
+        }
+        return sh;
+      };
+      const vs = compile(gl.VERTEX_SHADER, HERO_VERT);
+      const fs = compile(gl.FRAGMENT_SHADER, HERO_FRAG);
+      if (vs && fs) {
+        const prog = gl.createProgram();
+        gl.attachShader(prog, vs);
+        gl.attachShader(prog, fs);
+        gl.linkProgram(prog);
+        gl.useProgram(prog);
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER,
+          new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+        const loc = gl.getAttribLocation(prog, "aPos");
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+        ["uRes","uCenter","uRadius","uTime","uPar"].forEach(
+          (n) => (uni[n] = gl.getUniformLocation(prog, n))
+        );
+      } else { gl = null; }
+    }
+
+    /* ---------- dimensions / layout ---------- */
+    let w = 0, h = 0, dpr = 1, R = 0, cx = 0, cy = 0;
     const resize = () => {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
-      w = canvas.clientWidth; h = canvas.clientHeight;
-      canvas.width = w * dpr; canvas.height = h * dpr;
+      w = glCanvas.clientWidth; h = glCanvas.clientHeight;
+      [glCanvas, ovCanvas].forEach((c) => { c.width = w*dpr; c.height = h*dpr; });
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (gl) gl.viewport(0, 0, w*dpr, h*dpr);
+      const narrow = w < 760;
+      R  = Math.min(h*0.26, w*0.24);
+      cx = narrow ? w*0.5 : w*0.70;
+      cy = narrow ? h*0.34 : h*0.46;
     };
     resize();
     window.addEventListener("resize", resize);
 
-    /* --- starfield (3 couches de parallaxe) --- */
-    const stars = [];
-    for (let i = 0; i < 160; i++) {
-      stars.push({
-        x: Math.random(), y: Math.random(),
-        z: 0.3 + Math.random() * 0.7,
-        tw: Math.random() * Math.PI * 2,
-      });
-    }
-
-    /* --- orbites : Velocity Verlet, dt fixe --- */
-    const mu = 26000;
-    const sats = [];
-    for (let i = 0; i < 3; i++) {
-      const r = 120 + i * 60;
-      const v = Math.sqrt(mu / r) * (i === 1 ? 0.93 : 1.0);
-      const a0 = (i * 2 * Math.PI) / 3;
-      sats.push({
-        x: r * Math.cos(a0), y: r * Math.sin(a0),
-        vx: -v * Math.sin(a0), vy: v * Math.cos(a0),
-        trail: [],
-      });
-    }
-    const accel = (x, y) => {
-      const d2 = x * x + y * y, d = Math.sqrt(d2);
-      const a = -mu / (d2 * d);
-      return [a * x, a * y];
+    /* ---------- parallaxe souris ---------- */
+    let parX = 0, parY = 0, tParX = 0, tParY = 0;
+    const onMouse = (e) => {
+      tParX = (e.clientX / window.innerWidth  - 0.5) * 18;
+      tParY = (e.clientY / window.innerHeight - 0.5) * 12;
     };
-    const dt = 1 / 60;
+    window.addEventListener("mousemove", onMouse);
+
+    /* ---------- satellites : Velocity Verlet, dt fixe ---------- */
+    const dt = 1/60;
+    const omega2 = 0.06;                       // rythme visuel des orbites
+    const mu = omega2 * Math.pow(R*1.85, 3);   // mu cohérent avec l'échelle
+    const mkSat = (r, eccBoost, phase) => {
+      const v = Math.sqrt(mu / r) * eccBoost;
+      return {
+        x: r*Math.cos(phase), y: r*Math.sin(phase),
+        vx: -v*Math.sin(phase), vy: v*Math.cos(phase),
+        trail: [],
+      };
+    };
+    const sats = [
+      mkSat(R*1.42, 1.00, 2.1),   // SAT-01 : le cube (VoxelEngine en orbite)
+      mkSat(R*1.85, 0.90, 0.0),   // SAT-02 : elliptique · source du HUD
+      mkSat(R*2.35, 1.00, 4.0),
+    ];
+    const accel = (x, y) => {
+      const d2 = x*x + y*y, dd = Math.sqrt(d2);
+      const a = -mu / (d2*dd);
+      return [a*x, a*y];
+    };
     const stepSat = (s) => {
       let [ax, ay] = accel(s.x, s.y);
-      s.x += s.vx * dt + 0.5 * ax * dt * dt;
-      s.y += s.vy * dt + 0.5 * ay * dt * dt;
+      s.x += s.vx*dt + 0.5*ax*dt*dt;
+      s.y += s.vy*dt + 0.5*ay*dt*dt;
       const [ax2, ay2] = accel(s.x, s.y);
-      s.vx += 0.5 * (ax + ax2) * dt;
-      s.vy += 0.5 * (ay + ay2) * dt;
+      s.vx += 0.5*(ax+ax2)*dt;
+      s.vy += 0.5*(ay+ay2)*dt;
       s.trail.push([s.x, s.y]);
-      if (s.trail.length > 260) s.trail.shift();
+      if (s.trail.length > 300) s.trail.shift();
     };
 
-    /* --- cube wireframe : projection perspective manuelle --- */
-    const V = [
-      [-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],
-      [-1,-1, 1],[1,-1, 1],[1,1, 1],[-1,1, 1],
-    ];
-    const E = [
-      [0,1],[1,2],[2,3],[3,0],
-      [4,5],[5,6],[6,7],[7,4],
-      [0,4],[1,5],[2,6],[3,7],
-    ];
-    const project = (p, rx, ry, scale, cx, cy) => {
+    /* ---------- cube wireframe (SAT-01) ---------- */
+    const CV = [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],
+                [-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+    const CE = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],
+                [0,4],[1,5],[2,6],[3,7]];
+    const proj = (p, rx, ry, scale, px, py) => {
       let [x, y, z] = p;
-      // rotation Y
       let c = Math.cos(ry), s = Math.sin(ry);
-      [x, z] = [x * c + z * s, -x * s + z * c];
-      // rotation X
+      [x, z] = [x*c + z*s, -x*s + z*c];
       c = Math.cos(rx); s = Math.sin(rx);
-      [y, z] = [y * c - z * s, y * s + z * c];
-      const f = 4 / (4 + z); // perspective divide
-      return [cx + x * f * scale, cy + y * f * scale, f];
+      [y, z] = [y*c - z*s, y*s + z*c];
+      const f = 4/(4+z);
+      return [px + x*f*scale, py + y*f*scale, f];
     };
 
-    let t = 0;
-    const drawFrame = (animate) => {
-      t += animate ? 1 : 0;
+    /* ---------- HUD : éléments orbitaux depuis (r, v) ---------- */
+    const hudEls = {};
+    if (hudRef.current) {
+      hudRef.current.querySelectorAll("[data-k]").forEach((el) => {
+        hudEls[el.dataset.k] = el;
+      });
+    }
+    const updateHud = () => {
+      const s = sats[1];
+      const r = Math.hypot(s.x, s.y);
+      const v2 = s.vx*s.vx + s.vy*s.vy;
+      const eps = v2/2 - mu/r;                       // énergie spécifique
+      const hh = s.x*s.vy - s.y*s.vx;                // moment cinétique
+      const a = -mu/(2*eps);                          // demi-grand axe
+      const e = Math.sqrt(Math.max(0, 1 + 2*eps*hh*hh/(mu*mu)));
+      const T = 2*Math.PI*Math.sqrt(Math.abs(a*a*a)/mu);
+      if (hudEls.e)   hudEls.e.textContent   = e.toFixed(3);
+      if (hudEls.a)   hudEls.a.textContent   = a.toFixed(0) + " px";
+      if (hudEls.T)   hudEls.T.textContent   = T.toFixed(1) + " s";
+      if (hudEls.eps) hudEls.eps.textContent =
+        (eps < 0 ? "−" : "+") + Math.abs(eps).toFixed(0) + (eps < 0 ? " · liée" : " · libre");
+    };
+
+    /* ---------- boucle ---------- */
+    let raf = 0, t = 0, running = true;
+    const onVis = () => {
+      running = !document.hidden;
+      if (running && !reduced) raf = requestAnimationFrame(frame);
+    };
+    document.addEventListener("visibilitychange", onVis);
+
+    const drawOverlay = (animate) => {
       ctx.clearRect(0, 0, w, h);
+      const pcx = cx + parX, pcy = cy + parY;
 
-      // fond : vignette radiale
-      const bgGrad = ctx.createRadialGradient(w * 0.5, h * 0.42, 0, w * 0.5, h * 0.42, Math.max(w, h) * 0.7);
-      bgGrad.addColorStop(0, "rgba(35,45,65,0.5)");
-      bgGrad.addColorStop(1, "rgba(13,16,22,0)");
-      ctx.fillStyle = bgGrad;
-      ctx.fillRect(0, 0, w, h);
+      // fallback sans WebGL : disque planétaire en dégradé
+      if (!gl) {
+        const g = ctx.createRadialGradient(pcx - R*0.3, pcy - R*0.3, R*0.1, pcx, pcy, R*1.5);
+        g.addColorStop(0, "rgba(40,90,120,0.9)");
+        g.addColorStop(0.62, "rgba(10,25,40,0.95)");
+        g.addColorStop(0.72, "rgba(76,201,240,0.18)");
+        g.addColorStop(1, "rgba(76,201,240,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(pcx, pcy, R*1.5, 0, Math.PI*2); ctx.fill();
+      }
 
-      // étoiles
-      stars.forEach((st) => {
-        const tw = 0.5 + 0.5 * Math.sin(st.tw + t * 0.02 * st.z);
-        ctx.fillStyle = `rgba(200,215,240,${0.12 + 0.35 * tw * st.z})`;
-        ctx.fillRect(st.x * w, st.y * h, st.z * 1.6, st.z * 1.6);
-      });
-
-      // grille de viewport
-      ctx.strokeStyle = "rgba(120,140,170,0.05)";
-      ctx.lineWidth = 1;
-      const grid = 52;
-      for (let gx = 0; gx < w; gx += grid) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
-      for (let gy = 0; gy < h; gy += grid) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
-
-      const ocx = w * 0.72, ocy = h * 0.46; // centre orbites (côté droit)
-      const ccx = w * 0.72, ccy = h * 0.46; // cube au centre des orbites
-
-      // corps central lumineux
-      const g2 = ctx.createRadialGradient(ocx, ocy, 0, ocx, ocy, 56);
-      g2.addColorStop(0, "rgba(245,165,36,0.55)");
-      g2.addColorStop(1, "rgba(245,165,36,0)");
-      ctx.fillStyle = g2;
-      ctx.beginPath(); ctx.arc(ocx, ocy, 56, 0, Math.PI * 2); ctx.fill();
-
-      // cube wireframe (le "moteur") qui tourne au centre
-      const rx = t * 0.006 + 0.5, ry = t * 0.009;
-      const pts = V.map((p) => project(p, rx, ry, 34, ccx, ccy));
-      E.forEach(([a, b]) => {
-        const depth = (pts[a][2] + pts[b][2]) * 0.5;
-        ctx.strokeStyle = `rgba(245,165,36,${0.25 + depth * 0.45})`;
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
-        ctx.moveTo(pts[a][0], pts[a][1]);
-        ctx.lineTo(pts[b][0], pts[b][1]);
-        ctx.stroke();
-      });
-      pts.forEach((p) => {
-        ctx.fillStyle = `rgba(245,200,120,${0.4 + p[2] * 0.5})`;
-        ctx.beginPath(); ctx.arc(p[0], p[1], 1.8, 0, Math.PI * 2); ctx.fill();
-      });
-
-      // satellites + traînées
       sats.forEach((s, i) => {
         if (animate) for (let k = 0; k < 2; k++) stepSat(s);
-        const col = i === 1 ? "76,201,240" : "150,175,210";
-        ctx.beginPath();
-        s.trail.forEach(([px, py], k) => {
-          const sx = ocx + px, sy = ocy + py;
-          if (k === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
-        });
-        ctx.strokeStyle = `rgba(${col},0.4)`;
-        ctx.lineWidth = 1.3;
-        ctx.stroke();
-        // halo vaisseau
-        const sg = ctx.createRadialGradient(ocx + s.x, ocy + s.y, 0, ocx + s.x, ocy + s.y, 9);
-        sg.addColorStop(0, `rgba(${col},0.8)`);
-        sg.addColorStop(1, `rgba(${col},0)`);
-        ctx.fillStyle = sg;
-        ctx.beginPath(); ctx.arc(ocx + s.x, ocy + s.y, 9, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = `rgba(${col},1)`;
-        ctx.beginPath(); ctx.arc(ocx + s.x, ocy + s.y, 2.6, 0, Math.PI * 2); ctx.fill();
+        const col = i === 1 ? "76,201,240" : "165,185,215";
+        // traînée avec fondu
+        for (let k = 1; k < s.trail.length; k++) {
+          const a = (k / s.trail.length) * 0.5;
+          ctx.strokeStyle = "rgba(" + col + "," + a.toFixed(3) + ")";
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.moveTo(pcx + s.trail[k-1][0], pcy + s.trail[k-1][1]);
+          ctx.lineTo(pcx + s.trail[k][0],   pcy + s.trail[k][1]);
+          ctx.stroke();
+        }
+        const sx = pcx + s.x, sy = pcy + s.y;
+        if (i === 0) {
+          // SAT-01 : mini cube wireframe ambré qui tourne
+          const rx = t*0.02 + 0.5, ry = t*0.03;
+          const pts = CV.map((p) => proj(p, rx, ry, 8.5, sx, sy));
+          CE.forEach(([a, b]) => {
+            const depth = (pts[a][2] + pts[b][2]) * 0.5;
+            ctx.strokeStyle = "rgba(245,165,36," + (0.3 + depth*0.5).toFixed(3) + ")";
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(pts[a][0], pts[a][1]);
+            ctx.lineTo(pts[b][0], pts[b][1]);
+            ctx.stroke();
+          });
+        } else {
+          const hg = ctx.createRadialGradient(sx, sy, 0, sx, sy, 10);
+          hg.addColorStop(0, "rgba(" + col + ",0.85)");
+          hg.addColorStop(1, "rgba(" + col + ",0)");
+          ctx.fillStyle = hg;
+          ctx.beginPath(); ctx.arc(sx, sy, 10, 0, Math.PI*2); ctx.fill();
+          ctx.fillStyle = "rgba(" + col + ",1)";
+          ctx.beginPath(); ctx.arc(sx, sy, 2.6, 0, Math.PI*2); ctx.fill();
+        }
       });
 
-      if (animate) raf = requestAnimationFrame(() => drawFrame(true));
+      if (t % 12 === 0) updateHud();
+    };
+
+    const frame = () => {
+      if (!running) return;
+      t++;
+      parX += (tParX - parX) * 0.05;
+      parY += (tParY - parY) * 0.05;
+      if (gl) {
+        gl.uniform2f(uni.uRes, w*dpr, h*dpr);
+        gl.uniform2f(uni.uCenter, cx*dpr, (h - cy)*dpr);
+        gl.uniform1f(uni.uRadius, R*dpr);
+        gl.uniform1f(uni.uTime, t/60);
+        gl.uniform2f(uni.uPar, parX*dpr, -parY*dpr);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+      drawOverlay(true);
+      raf = requestAnimationFrame(frame);
     };
 
     if (reduced) {
-      sats.forEach((s) => { for (let k = 0; k < 260; k++) stepSat(s); });
-      t = 120;
-      drawFrame(false);
+      // état figé mais physiquement correct
+      sats.forEach((s) => { for (let k = 0; k < 300; k++) stepSat(s); });
+      t = 200;
+      if (gl) {
+        gl.uniform2f(uni.uRes, w*dpr, h*dpr);
+        gl.uniform2f(uni.uCenter, cx*dpr, (h - cy)*dpr);
+        gl.uniform1f(uni.uRadius, R*dpr);
+        gl.uniform1f(uni.uTime, 30);
+        gl.uniform2f(uni.uPar, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+      drawOverlay(false);
+      updateHud();
     } else {
-      raf = requestAnimationFrame(() => drawFrame(true));
+      raf = requestAnimationFrame(frame);
     }
 
-    return () => { cancelAnimationFrame(raf); window.removeEventListener("resize", resize); };
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("mousemove", onMouse);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
 
-  return <canvas ref={ref} className="hero-canvas" aria-hidden="true" />;
+  return (
+    <>
+      <canvas ref={glRef} className="hero-canvas" aria-hidden="true" />
+      <canvas ref={ovRef} className="hero-canvas" aria-hidden="true" />
+      <div className="hud" ref={hudRef} aria-hidden="true">
+        <div className="hud-title">TELEMETRY · SAT-02</div>
+        <div className="hud-row"><span>excentricité e</span><b data-k="e">···</b></div>
+        <div className="hud-row"><span>demi-grand axe a</span><b data-k="a">···</b></div>
+        <div className="hud-row"><span>période T</span><b data-k="T">···</b></div>
+        <div className="hud-row"><span>énergie ε</span><b data-k="eps">···</b></div>
+        <div className="hud-foot">calculé live depuis (r, v) · Velocity Verlet</div>
+      </div>
+    </>
+  );
 }
 
 /* ============================================================
@@ -591,6 +826,21 @@ export default function Portfolio() {
         @keyframes pulse { 50% { opacity: 0.35; } }
         @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } .ticker-inner { animation: none !important; } }
 
+        /* ---------- HUD télémétrie ---------- */
+        .hud {
+          position: absolute; right: 28px; bottom: 26px; z-index: 3;
+          font-family: var(--mono); font-size: 11.5px;
+          background: rgba(13,16,22,0.55); backdrop-filter: blur(8px);
+          border: 1px solid var(--line); border-radius: 10px;
+          padding: 12px 14px; min-width: 230px;
+          color: var(--text-dim);
+        }
+        .hud-title { color: var(--cyan); letter-spacing: 0.14em; font-size: 10px; margin-bottom: 8px; }
+        .hud-row { display: flex; justify-content: space-between; gap: 18px; padding: 2px 0; }
+        .hud-row b { color: var(--text); font-weight: 600; }
+        .hud-foot { margin-top: 8px; font-size: 9.5px; color: rgba(139,151,168,0.7); border-top: 1px solid var(--line); padding-top: 7px; }
+        @media (max-width: 880px) { .hud { display: none; } }
+
         /* ---------- TICKER ---------- */
         .ticker {
           border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
@@ -784,11 +1034,11 @@ export default function Portfolio() {
 
       {/* HERO */}
       <header className="hero">
-        <HeroCanvas />
+        <HeroVisual />
         <div className="hero-content">
           <p className="hero-eyebrow">{PROFILE.tagline}</p>
           <h1>
-            Du <span className="accent">draw call</span> à l'<span className="accent2">orbite</span> —
+            Du <span className="accent">draw call</span> à l'<span className="accent2">orbite</span> :
             je construis le rendu et la physique qui les fait tourner.
           </h1>
           <p className="hero-sub">
@@ -807,7 +1057,7 @@ export default function Portfolio() {
           </div>
           <div className="live-note">
             <span className="live-dot" />
-            rendu live — projection perspective + intégration symplectique · dt = 1/60 s
+            rendu temps réel · planète shadée en GLSL (fragment shader maison) · orbites en Velocity Verlet · dt = 1/60 s
           </div>
         </div>
       </header>
@@ -830,7 +1080,7 @@ export default function Portfolio() {
 
       {/* METHOD */}
       <section id="methode" className="method">
-        <h2>Deux projets différents, une méthode commune — celle d'un code fait pour durer.</h2>
+        <h2>Deux projets différents, une méthode commune : celle d'un code fait pour durer.</h2>
         <div className="method-grid">
           <div className="method-card">
             <h3>// Architecture explicite</h3>
@@ -867,13 +1117,13 @@ export default function Portfolio() {
           <div className="terminal">
             <div className="terminal-bar">
               <i /><i /><i />
-              <span>build — toutes plateformes</span>
+              <span>build · toutes plateformes</span>
             </div>
             <pre>
 {`$ `}<span className="p">git clone</span>{` https://github.com/Krio18/VOXEL && cd VOXEL
 $ `}<span className="p">cmake</span>{` -B build -DCMAKE_BUILD_TYPE=Release
 $ `}<span className="p">cmake</span>{` --build build
-`}<span className="c"># Vulkan sur Linux · D3D12 sur Windows · Metal sur macOS — auto-détecté par bgfx</span>{`
+`}<span className="c"># Vulkan sur Linux · D3D12 sur Windows · Metal sur macOS · auto-détecté par bgfx</span>{`
 `}<span className="ok">[100%] Built target VoxelEngine ✓</span>
             </pre>
           </div>
@@ -885,7 +1135,7 @@ $ `}<span className="p">cmake</span>{` --build build
         <h2>Parlons rendu.</h2>
         <p>
           À la recherche d'opportunités en graphics programming.
-          Le code des deux projets est ouvert — la meilleure façon de me jauger
+          Le code des deux projets est ouvert : la meilleure façon de me jauger
           est de le lire.
         </p>
         <div className="contact-row">
@@ -902,7 +1152,7 @@ $ `}<span className="p">cmake</span>{` --build build
       </section>
 
       <footer className="footer">
-        <span>Killian Cottrelle — Graphics Programmer</span>
+        <span>Killian Cottrelle · Graphics Programmer</span>
         <span>
           <a href={PROFILE.github} target="_blank" rel="noreferrer">GitHub</a>
           <a href={PROFILE.linkedin} target="_blank" rel="noreferrer">LinkedIn</a>
