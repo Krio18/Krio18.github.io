@@ -1,15 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
-/* ============================================================
-   CONFIG
-   ============================================================ */
 const PROFILE = {
   name: "Killian Cottrelle",
   tagline: "Graphics Programmer · C++",
   email: "killian.cottrelle@epitech.eu",
   github: "https://github.com/Krio18",
   linkedin: "https://www.linkedin.com/in/killian-cottrelle/",
-  cvUrl: "#", // lien vers ton CV PDF
+  cvUrl: "#",
 };
 
 const GH_USER = "Krio18";
@@ -111,9 +108,6 @@ const LANG_COLORS = {
   Shell: "#89e051", Makefile: "#427819", Python: "#3572A5", Other: "#8b97a8",
 };
 
-/* ============================================================
-   GITHUB API · fetch live, fallback statique si indisponible
-   ============================================================ */
 function useGithubRepo(project) {
   const [data, setData] = useState({ ...project.fallback, live: false });
 
@@ -163,9 +157,7 @@ function useGithubRepo(project) {
             live: true,
           });
         }
-      } catch {
-        /* offline / rate-limit → on garde le fallback, le site reste complet */
-      }
+      } catch {}
     };
     load();
     return () => { cancelled = true; };
@@ -185,14 +177,6 @@ function timeAgoFr(iso) {
   if (m < 12) return `il y a ${m} mois`;
   return `il y a ${Math.floor(m / 12)} an${m >= 24 ? "s" : ""}`;
 }
-
-/* ============================================================
-   HERO VISUAL · planète GLSL (fragment shader maison) + orbites
-   Couche 1 : WebGL  · sphère shadée : terrain FBM, océans spéculaires,
-                       nuages, atmosphère limbe, villes nocturnes, étoiles
-   Couche 2 : Canvas · satellites intégrés en Velocity Verlet (dt fixe)
-   Couche 3 : HUD    · éléments orbitaux calculés live depuis (r, v)
-   ============================================================ */
 
 const HERO_VERT = `
 attribute vec2 aPos;
@@ -235,23 +219,20 @@ void main(){
   float d = length(q);
   vec3 col = vec3(0.0);
 
-  /* --- fond : nébuleuse discrète + étoiles jitterées (2 couches) --- */
   vec2 suv = (frag - uPar*2.4) / uRes.y;
   col += vec3(0.10,0.13,0.22) * fbm(vec3(suv*2.0, 7.31)) * 0.35;
 
-  /* couche lointaine : petites étoiles, parallaxe faible */
   {
     vec2 sp = (frag - uPar*3.0) / 34.0;
     vec2 g = floor(sp), f = fract(sp);
     float rnd = h21(g);
-    vec2 o = vec2(h21(g + 11.3), h21(g + 27.7));   // position aléatoire dans la cellule
+    vec2 o = vec2(h21(g + 11.3), h21(g + 27.7));
     float ds = length(f - o);
     float m = step(0.45, rnd);
     float tw = 0.6 + 0.4*sin(uTime*(0.8 + rnd*3.0) + rnd*40.0);
     vec3 stc = mix(vec3(0.72,0.80,1.0), vec3(1.0,0.88,0.72), h21(g + 5.1));
     col += stc * m * smoothstep(0.05, 0.0, ds) * (0.20 + 0.50*rnd) * tw;
   }
-  /* couche proche : étoiles plus grosses et brillantes, parallaxe forte */
   {
     vec2 sp = (frag - uPar*5.5) / 78.0;
     vec2 g = floor(sp), f = fract(sp);
@@ -262,25 +243,23 @@ void main(){
     float tw = 0.55 + 0.45*sin(uTime*(0.6 + rnd*2.0) + rnd*60.0);
     vec3 stc = mix(vec3(0.80,0.86,1.0), vec3(1.0,0.90,0.75), h21(g + 7.7));
     col += stc * m * smoothstep(0.075, 0.0, ds) * (0.45 + 0.55*rnd) * tw;
-    col += stc * m * exp(-ds*22.0) * 0.18 * tw;    // halo doux
+    col += stc * m * exp(-ds*22.0) * 0.18 * tw;
   }
 
-  vec3 L = normalize(vec3(-0.55, 0.42, 0.55));   // soleil hors-champ
+  vec3 L = normalize(vec3(-0.55, 0.42, 0.55));
 
-  /* --- atmosphère : diffusion sur le limbe --- */
   if(d > 0.985 && d < 1.7){
     float lit = clamp(dot(normalize(vec3(q,0.25)), L)*0.9 + 0.35, 0.0, 1.0);
     col += vec3(0.30,0.79,0.94) * exp(-(d-1.0)*7.5)  * lit * 0.9;
     col += vec3(0.96,0.65,0.14) * exp(-(d-1.0)*16.0) * pow(lit,3.0) * 0.45;
   }
 
-  /* --- planète (sphère analytique, normale exacte) --- */
   if(d < 1.0){
     float z = sqrt(1.0 - d*d);
     vec3 n  = vec3(q, z);
-    vec3 sp = rotZ(0.41) * rotY(uTime*0.05) * n;   // axe incliné + rotation sidérale
+    vec3 sp = rotZ(0.41) * rotY(uTime*0.05) * n;
 
-    float h    = fbm(sp*3.1);                       // archipels, pas des continents terrestres
+    float h    = fbm(sp*3.1);
     float land = smoothstep(0.49, 0.52, h);
     float mont = smoothstep(0.60, 0.70, h);
 
@@ -295,13 +274,12 @@ void main(){
     vec3 H = normalize(L + vec3(0.0,0.0,1.0));
     float spec = pow(clamp(dot(n,H),0.0,1.0), 90.0) * (1.0-land) * dif;
 
-    vec3 cp = rotZ(0.41) * rotY(uTime*0.066) * n;  // nuages : vitesse propre
+    vec3 cp = rotZ(0.41) * rotY(uTime*0.066) * n;
     float cl = smoothstep(0.55, 0.72, fbm(cp*3.4 + vec3(0.0, uTime*0.01, 0.0)));
 
     vec3 day = alb*(0.12 + 0.95*dif)*term + vec3(spec)*0.8;
     day = mix(day, vec3(0.86,0.83,0.76)*(0.25+0.85*dif), cl*0.85*term);
 
-    /* villes nocturnes : ambre, sur les côtes, masquées par les nuages */
     float coast   = smoothstep(0.49,0.52,h) * (1.0 - smoothstep(0.55,0.59,h));
     float sparkle = smoothstep(0.62, 0.95, noise(sp*48.0));
     float night   = 1.0 - term;
@@ -313,13 +291,11 @@ void main(){
     col = day + cities + rim + vec3(0.30,0.79,0.94)*0.05*night;
   }
 
-  /* --- glare solaire --- */
   vec2 sunPx = uCenter + vec2(-uRadius*2.1, uRadius*1.45) + uPar*1.6;
   float sd = length(frag - sunPx) / uRadius;
   col += vec3(1.0,0.85,0.55) * exp(-sd*3.2)  * 0.55;
   col += vec3(1.0,0.95,0.85) * exp(-sd*22.0) * 1.2;
 
-  /* --- grain anti-banding + vignette --- */
   col += (h21(frag + uTime) - 0.5) * 0.012;
   vec2 vuv = frag/uRes - 0.5;
   col *= 1.0 - dot(vuv, vuv)*0.55;
@@ -342,7 +318,6 @@ function HeroVisual() {
       window.matchMedia &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    /* ---------- WebGL setup ---------- */
     let gl = null, uni = {};
     try {
       gl = glCanvas.getContext("webgl", { antialias: false }) ||
@@ -381,7 +356,6 @@ function HeroVisual() {
       } else { gl = null; }
     }
 
-    /* ---------- dimensions / layout ---------- */
     let w = 0, h = 0, dpr = 1, R = 0, cx = 0, cy = 0;
     const resize = () => {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -397,7 +371,6 @@ function HeroVisual() {
     resize();
     window.addEventListener("resize", resize);
 
-    /* ---------- parallaxe souris ---------- */
     let parX = 0, parY = 0, tParX = 0, tParY = 0;
     const onMouse = (e) => {
       tParX = (e.clientX / window.innerWidth  - 0.5) * 18;
@@ -405,10 +378,9 @@ function HeroVisual() {
     };
     window.addEventListener("mousemove", onMouse);
 
-    /* ---------- satellites : Velocity Verlet, dt fixe ---------- */
     const dt = 1/60;
-    const omega2 = 0.06;                       // rythme visuel des orbites
-    const mu = omega2 * Math.pow(R*1.85, 3);   // mu cohérent avec l'échelle
+    const omega2 = 0.06;
+    const mu = omega2 * Math.pow(R*1.85, 3);
     const mkSat = (r, eccBoost, phase) => {
       const v = Math.sqrt(mu / r) * eccBoost;
       return {
@@ -418,8 +390,8 @@ function HeroVisual() {
       };
     };
     const sats = [
-      mkSat(R*1.42, 1.00, 2.1),   // SAT-01 : le cube (VoxelEngine en orbite)
-      mkSat(R*1.85, 0.90, 0.0),   // SAT-02 : elliptique · source du HUD
+      mkSat(R*1.42, 1.00, 2.1),
+      mkSat(R*1.85, 0.90, 0.0),
       mkSat(R*2.35, 1.00, 4.0),
     ];
     const accel = (x, y) => {
@@ -438,7 +410,6 @@ function HeroVisual() {
       if (s.trail.length > 300) s.trail.shift();
     };
 
-    /* ---------- cube wireframe (SAT-01) ---------- */
     const CV = [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],
                 [-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
     const CE = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],
@@ -453,7 +424,6 @@ function HeroVisual() {
       return [px + x*f*scale, py + y*f*scale, f];
     };
 
-    /* ---------- HUD : éléments orbitaux depuis (r, v) ---------- */
     const hudEls = {};
     if (hudRef.current) {
       hudRef.current.querySelectorAll("[data-k]").forEach((el) => {
@@ -464,9 +434,9 @@ function HeroVisual() {
       const s = sats[1];
       const r = Math.hypot(s.x, s.y);
       const v2 = s.vx*s.vx + s.vy*s.vy;
-      const eps = v2/2 - mu/r;                       // énergie spécifique
-      const hh = s.x*s.vy - s.y*s.vx;                // moment cinétique
-      const a = -mu/(2*eps);                          // demi-grand axe
+      const eps = v2/2 - mu/r;
+      const hh = s.x*s.vy - s.y*s.vx;
+      const a = -mu/(2*eps);
       const e = Math.sqrt(Math.max(0, 1 + 2*eps*hh*hh/(mu*mu)));
       const T = 2*Math.PI*Math.sqrt(Math.abs(a*a*a)/mu);
       if (hudEls.e)   hudEls.e.textContent   = e.toFixed(3);
@@ -476,7 +446,6 @@ function HeroVisual() {
         (eps < 0 ? "−" : "+") + Math.abs(eps).toFixed(0) + (eps < 0 ? " · liée" : " · libre");
     };
 
-    /* ---------- boucle ---------- */
     let raf = 0, t = 0, running = true;
     const onVis = () => {
       running = !document.hidden;
@@ -488,7 +457,6 @@ function HeroVisual() {
       ctx.clearRect(0, 0, w, h);
       const pcx = cx + parX, pcy = cy + parY;
 
-      // fallback sans WebGL : disque planétaire en dégradé
       if (!gl) {
         const g = ctx.createRadialGradient(pcx - R*0.3, pcy - R*0.3, R*0.1, pcx, pcy, R*1.5);
         g.addColorStop(0, "rgba(40,90,120,0.9)");
@@ -502,7 +470,6 @@ function HeroVisual() {
       sats.forEach((s, i) => {
         if (animate) for (let k = 0; k < 2; k++) stepSat(s);
         const col = i === 1 ? "76,201,240" : "165,185,215";
-        // traînée avec fondu
         for (let k = 1; k < s.trail.length; k++) {
           const a = (k / s.trail.length) * 0.5;
           ctx.strokeStyle = "rgba(" + col + "," + a.toFixed(3) + ")";
@@ -514,7 +481,6 @@ function HeroVisual() {
         }
         const sx = pcx + s.x, sy = pcy + s.y;
         if (i === 0) {
-          // SAT-01 : mini cube wireframe ambré qui tourne
           const rx = t*0.02 + 0.5, ry = t*0.03;
           const pts = CV.map((p) => proj(p, rx, ry, 8.5, sx, sy));
           CE.forEach(([a, b]) => {
@@ -558,7 +524,6 @@ function HeroVisual() {
     };
 
     if (reduced) {
-      // état figé mais physiquement correct
       sats.forEach((s) => { for (let k = 0; k < 300; k++) stepSat(s); });
       t = 200;
       if (gl) {
@@ -599,9 +564,6 @@ function HeroVisual() {
   );
 }
 
-/* ============================================================
-   COMPOSANTS
-   ============================================================ */
 function LangBar({ languages, accent }) {
   const entries = Object.entries(languages);
   return (
@@ -744,9 +706,6 @@ function ProjectSection({ project, flip }) {
   );
 }
 
-/* ============================================================
-   PAGE
-   ============================================================ */
 export default function Portfolio() {
   const [copied, setCopied] = useState(false);
   const copyEmail = () => {
@@ -777,7 +736,6 @@ export default function Portfolio() {
         a { color: inherit; }
         :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; border-radius: 2px; }
 
-        /* ---------- NAV ---------- */
         .nav {
           position: sticky; top: 0; z-index: 30;
           display: flex; align-items: center; justify-content: space-between;
@@ -792,10 +750,9 @@ export default function Portfolio() {
         .nav-links a { color: var(--text-dim); text-decoration: none; transition: color .15s; }
         .nav-links a:hover { color: var(--text); }
 
-        /* ---------- HERO ---------- */
         .hero { position: relative; min-height: 88vh; display: flex; align-items: center; overflow: hidden; }
         .hero-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-        .hero-content { position: relative; z-index: 2; max-width: 1180px; margin: 0 auto; padding: 90px 32px; width: 100%; }
+        .hero-content { position: relative; z-index: 2; max-width: 680px; padding: 90px 32px 90px 80px; }
         .hero-eyebrow {
           font-family: var(--mono); font-size: 13px; color: var(--cyan);
           letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 18px;
@@ -806,7 +763,7 @@ export default function Portfolio() {
           font-family: var(--mono);
           font-size: clamp(34px, 5.2vw, 62px);
           font-weight: 700; line-height: 1.12; letter-spacing: -0.02em;
-          max-width: 720px; text-wrap: balance;
+          max-width: 720px;
           text-shadow: 0 0 40px rgba(13,16,22,0.9);
         }
         .hero h1 .accent { color: var(--amber); text-shadow: 0 0 24px rgba(245,165,36,0.35); }
@@ -826,7 +783,6 @@ export default function Portfolio() {
         @keyframes pulse { 50% { opacity: 0.35; } }
         @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } .ticker-inner { animation: none !important; } }
 
-        /* ---------- HUD télémétrie ---------- */
         .hud {
           position: absolute; right: 28px; bottom: 26px; z-index: 3;
           font-family: var(--mono); font-size: 11.5px;
@@ -841,7 +797,6 @@ export default function Portfolio() {
         .hud-foot { margin-top: 8px; font-size: 9.5px; color: rgba(139,151,168,0.7); border-top: 1px solid var(--line); padding-top: 7px; }
         @media (max-width: 880px) { .hud { display: none; } }
 
-        /* ---------- TICKER ---------- */
         .ticker {
           border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
           background: var(--bg-card); overflow: hidden; white-space: nowrap;
@@ -856,7 +811,6 @@ export default function Portfolio() {
         .ticker-inner span::after { content: "·"; margin-left: 26px; color: var(--amber); }
         @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
-        /* ---------- BUTTONS ---------- */
         .btn {
           display: inline-flex; align-items: center; gap: 8px;
           padding: 12px 22px; border-radius: 6px;
@@ -871,7 +825,6 @@ export default function Portfolio() {
         .btn--ghost { border-color: var(--line); color: var(--text); background: rgba(255,255,255,0.03); }
         .btn--ghost:hover { border-color: var(--text-dim); }
 
-        /* ---------- PROJECTS ---------- */
         .projects-wrap { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
         .project {
           display: grid; grid-template-columns: 1.5fr 1fr; gap: 52px;
@@ -915,7 +868,6 @@ export default function Portfolio() {
         }
         .cta-row { margin-top: 30px; display: flex; gap: 12px; flex-wrap: wrap; }
 
-        /* ---------- SIDE CARDS ---------- */
         .project-side { display: grid; gap: 18px; align-content: start; padding-top: 50px; }
         .side-card {
           border: 1px solid var(--line); border-radius: 12px;
@@ -958,7 +910,6 @@ export default function Portfolio() {
         .phase-status { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); }
         .phase--done .phase-status { color: var(--text); }
 
-        /* ---------- METHOD ---------- */
         .method { max-width: 1180px; margin: 0 auto; padding: 86px 32px; border-bottom: 1px solid var(--line); }
         .method h2 { font-family: var(--mono); font-size: clamp(22px, 2.6vw, 30px); letter-spacing: -0.01em; margin-bottom: 44px; max-width: 720px; }
         .method-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
@@ -988,7 +939,6 @@ export default function Portfolio() {
         .terminal pre .c { color: #5a6678; }
         .terminal pre .ok { color: #6ee7a0; }
 
-        /* ---------- CONTACT ---------- */
         .contact { max-width: 1180px; margin: 0 auto; padding: 92px 32px 76px; text-align: center; }
         .contact h2 { font-family: var(--mono); font-size: clamp(26px, 3.4vw, 40px); letter-spacing: -0.02em; }
         .contact p { margin-top: 14px; color: var(--text-dim); max-width: 500px; margin-left: auto; margin-right: auto; }
@@ -1008,7 +958,6 @@ export default function Portfolio() {
         .footer a { color: var(--text-dim); text-decoration: none; margin-left: 18px; }
         .footer a:hover { color: var(--text); }
 
-        /* ---------- RESPONSIVE ---------- */
         @media (max-width: 920px) {
           .project, .project--flip { grid-template-columns: 1fr; gap: 32px; padding: 64px 0; }
           .project--flip .project-main { order: 1; }
@@ -1021,9 +970,8 @@ export default function Portfolio() {
         }
       `}</style>
 
-      {/* NAV */}
       <nav className="nav">
-        <div className="nav-brand"><b>~/</b>killian-cottrelle</div>
+        <div className="nav-brand"><b>Cottrelle's</b> Corner</div>
         <div className="nav-links">
           <a href="#voxelengine">VoxelEngine</a>
           <a href="#orbitsim">OrbitSim</a>
@@ -1032,20 +980,18 @@ export default function Portfolio() {
         </div>
       </nav>
 
-      {/* HERO */}
       <header className="hero">
         <HeroVisual />
         <div className="hero-content">
           <p className="hero-eyebrow">{PROFILE.tagline}</p>
           <h1>
-            Du <span className="accent">draw call</span> à l'<span className="accent2">orbite</span> :
-            je construis le rendu et la physique qui les fait tourner.
+            <span className="accent">Rendu</span> et <span className="accent2">physique</span>, from scratch.
           </h1>
           <p className="hero-sub">
-            Graphics programmer. Deux projets, une même exigence : architecture
-            documentée, physique validée contre l'analytique, déterminisme au cœur.
-            Le cube et les orbites derrière ce texte sont projetés et intégrés
-            en <code>Velocity Verlet</code>, en direct, dans votre navigateur.
+            Graphics programmer passionné par le bas-niveau. Deux projets ouverts, une même
+            philosophie : valider avec des maths, ne rien laisser au hasard. La planète et
+            les satellites que vous voyez tournent réellement dans votre navigateur, calculés
+            en <code>Velocity Verlet</code> en temps réel.
           </p>
           <div className="hero-cta">
             <a className="btn btn--solid" style={{ background: "var(--amber)" }} href="#voxelengine">
@@ -1057,12 +1003,11 @@ export default function Portfolio() {
           </div>
           <div className="live-note">
             <span className="live-dot" />
-            rendu temps réel · planète shadée en GLSL (fragment shader maison) · orbites en Velocity Verlet · dt = 1/60 s
+            rendu temps réel · planète en GLSL · orbites en Velocity Verlet · dt = 1/60 s
           </div>
         </div>
       </header>
 
-      {/* TICKER */}
       <div className="ticker" aria-hidden="true">
         <div className="ticker-inner">
           {[...TICKER, ...TICKER].map((t, i) => (
@@ -1071,31 +1016,29 @@ export default function Portfolio() {
         </div>
       </div>
 
-      {/* PROJECTS */}
       <main className="projects-wrap">
         {PROJECTS.map((p, i) => (
           <ProjectSection key={p.id} project={p} flip={i % 2 === 1} />
         ))}
       </main>
 
-      {/* METHOD */}
       <section id="methode" className="method">
-        <h2>Deux projets différents, une méthode commune : celle d'un code fait pour durer.</h2>
+        <h2>Deux projets différents, une même façon de travailler : écrire du code dont je suis encore fier six mois plus tard.</h2>
         <div className="method-grid">
           <div className="method-card">
             <h3>// Architecture explicite</h3>
             <p>
-              Ordre d'initialisation des systèmes documenté, séparation sim/rendu
-              stricte, patterns partagés entre projets (Service Locator, fixed
-              timestep, lifecycle de managers). Les décisions sont écrites avant le code.
+              Chaque système sait quand il démarre et quand il s'arrête. La séparation
+              sim/rendu est stricte, les patterns sont partagés entre projets. Les décisions
+              sont écrites avant le code.
             </p>
           </div>
           <div className="method-card">
             <h3>// Validation, pas vibes</h3>
             <p>
-              Chaque système a sa vérité-terrain : énergie orbitale conservée, Δv
-              vérifié contre Tsiolkovsky, static_assert sur les layouts mémoire.
-              Une simulation qui a juste l'air correcte ne suffit pas.
+              Chaque système a ses tests de vérité : énergie orbitale conservée, Δv conforme
+              à Tsiolkovsky, layouts mémoire vérifiés à la compilation. Que ça ait l'air
+              correct ne suffit pas.
             </p>
           </div>
           <div className="method-card">
@@ -1109,9 +1052,8 @@ export default function Portfolio() {
           <div className="method-card">
             <h3>// Roadmaps traçables</h3>
             <p>
-              Chaque projet a une roadmap versionnée dans le dépôt : phases,
-              décisions techniques justifiées, tâches reportées tracées, stratégie
-              de tests. Le plan fait partie du livrable.
+              La roadmap est dans le dépôt, pas dans un doc Google quelque part. Phases,
+              décisions justifiées, tâches en suspens, stratégie de tests : tout est là.
             </p>
           </div>
           <div className="terminal">
@@ -1130,13 +1072,12 @@ $ `}<span className="p">cmake</span>{` --build build
         </div>
       </section>
 
-      {/* CONTACT */}
       <section id="contact" className="contact">
         <h2>Parlons rendu.</h2>
         <p>
-          À la recherche d'opportunités en graphics programming.
-          Le code des deux projets est ouvert : la meilleure façon de me jauger
-          est de le lire.
+          Je cherche un poste en graphics programming ou simulation.
+          Les dépôts sont ouverts, la meilleure façon de voir ce que je fais
+          c'est encore de regarder le code.
         </p>
         <div className="contact-row">
           <a className="btn btn--solid" style={{ background: "var(--cyan)" }} href={`mailto:${PROFILE.email}`}>
@@ -1152,7 +1093,7 @@ $ `}<span className="p">cmake</span>{` --build build
       </section>
 
       <footer className="footer">
-        <span>Killian Cottrelle · Graphics Programmer</span>
+        <span>Cottrelle's Corner</span>
         <span>
           <a href={PROFILE.github} target="_blank" rel="noreferrer">GitHub</a>
           <a href={PROFILE.linkedin} target="_blank" rel="noreferrer">LinkedIn</a>
